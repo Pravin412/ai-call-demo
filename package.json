@@ -1,0 +1,12 @@
+{
+  "name": "clinic-voice-agent",
+  "private": true,
+  "description": "AI voice agent that calls clinic patients about cancelled appointments and helps them rebook",
+  "scripts": {
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "prettier": "3.3.3"
+  }
+}

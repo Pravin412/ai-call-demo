@@ -1,0 +1,59 @@
+{
+  "clinic": {
+    "name": "City Care Clinic",
+    "phone": "+91-44-12345678"
+  },
+  "doctor": {
+    "name": "Dr. Meena",
+    "specialty": "General Physician"
+  },
+  "appointments": [
+    {
+      "id": "APT001",
+      "customerName": "Ravi Kumar",
+      "phone": "+91-9876543210",
+      "time": "2026-10-29 10:30 AM",
+      "status": "rebooked"
+    },
+    {
+      "id": "APT002",
+      "customerName": "Priya Sharma",
+      "phone": "+91-9876543211",
+      "time": "2026-10-29 09:00 AM",
+      "status": "rebooked"
+    },
+    {
+      "id": "APT003",
+      "customerName": "Arun Nair",
+      "phone": "+91-9876543212",
+      "time": "2026-10-28 02:00 PM",
+      "status": "scheduled"
+    }
+  ],
+  "freeSlots": [
+    {
+      "id": "SLOT003",
+      "time": "2026-10-29 11:00 AM"
+    },
+    {
+      "id": "SLOT004",
+      "time": "2026-10-29 02:00 PM"
+    },
+    {
+      "id": "SLOT005",
+      "time": "2026-10-29 03:30 PM"
+    },
+    {
+      "id": "SLOT006",
+      "time": "2026-10-30 09:30 AM"
+    },
+    {
+      "id": "SLOT007",
+      "time": "2026-10-30 11:00 AM"
+    },
+    {
+      "id": "SLOT008",
+      "time": "2026-10-30 04:00 PM"
+    }
+  ]
+}
