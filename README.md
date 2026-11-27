@@ -70,13 +70,16 @@ npm run start:dev         # http://localhost:3005
 
 Key settings in `backend/.env`:
 
-| Variable             | Meaning                                                         |
-| -------------------- | --------------------------------------------------------------- |
-| `USE_BROWSER_SPEECH` | `true` = browser does speech; `false` = Gemini Live does it all |
-| `USE_GROQ`           | `true` = Groq answers (browser-speech mode only)                |
-| `GROQ_API_KEY`       | Groq key                                                        |
-| `GEMINI_API_KEY`     | Gemini key                                                      |
-| `PORT`               | Backend port, keep `3005` (the frontend calls it)               |
+| Variable                     | Meaning                                                         |
+| ---------------------------- | --------------------------------------------------------------- |
+| `USE_BROWSER_SPEECH`         | `true` = browser does speech; `false` = Gemini Live does it all |
+| `USE_GROQ`                   | `true` = Groq answers (browser-speech mode only)                |
+| `GROQ_API_KEY`               | Groq key                                                        |
+| `GEMINI_API_KEY`             | Gemini key                                                      |
+| `PORT`                       | Backend port, keep `3005` (the frontend calls it)               |
+| `VOICE_AI_BASE_URL`          | Current ngrok URL of the Colab voice AI service                 |
+| `VOICE_AI_API_KEY`           | Sent as `X-API-Key` once the Python service checks it           |
+| `VOICE_AI_VOICE_SAMPLE_PATH` | Authorised voice sample used when a request sends none          |
 
 ### 3. Frontend
 
@@ -117,11 +120,13 @@ backend/                 NestJS API + WebSocket
   src/calls/             REST endpoints, WebSocket gateway, per-call session and AI instructions
   src/voice/             All AI logic: Gemini Live, Gemini text, Groq, tool calling
   src/clinic/            Tool implementations over data/clinic.json
+  src/colab-calls/       Separate routes for Colab-voiced test calls
+  src/voice-ai/          Proxy to the Python voice AI service on Colab (Whisper, Llama, XTTS-v2)
   data/clinic.json       Demo clinic, appointments and free slots (changed by the tools)
 frontend/                React + Vite
   src/App.tsx            Screens, WebSocket and audio wiring
   src/audio.ts           Mic/speaker (Gemini Live) and browser speech
-  src/pages/             Setup, Ringing, Call, Result screens
+  src/pages/             Setup, Ringing, Call, Result screens; VoiceAssistant (Colab push-to-talk)
   public/audio-processor.js  AudioWorklet that turns mic input into 16 kHz PCM
 ```
 
@@ -134,6 +139,54 @@ frontend/                React + Vite
 | GET    | `/calls/appointments`                  | Appointments (incl. staff callbacks)   |
 | POST   | `/calls/callbacks/:appointmentId/done` | Staff marks a callback as done         |
 | WS     | `/calls/stream?sessionId=…`            | Live audio/text and call events        |
+| POST   | `/colab-calls/start`                   | Start a Colab-voiced test call         |
+| WS     | `/colab-calls/stream?sessionId=…`      | Push-to-talk audio for that call       |
+| GET    | `/api/v1/voice-ai/health`              | Colab voice AI health                  |
+| POST   | `/api/v1/voice-ai/process`             | Speech in → AI reply (multipart)       |
+| GET    | `/api/v1/voice-ai/audio/:requestId`    | Generated reply audio                  |
+
+### Colab voice AI
+
+`/api/v1/voice-ai/*` forwards to the Python service (FastAPI on Google Colab, exposed by ngrok). The frontend never
+sees the Colab URL. Uploads stay in memory and are not saved.
+
+1. Run the Colab notebook and copy its ngrok URL into `VOICE_AI_BASE_URL` in `backend/.env`. Set
+   `VOICE_AI_VOICE_SAMPLE_PATH` to the authorised voice the AI should reply in (`.wav` files are gitignored).
+2. Restart the backend (`npm run start:dev`). The ngrok URL changes whenever the tunnel restarts.
+3. Try it:
+
+```bash
+curl http://localhost:3005/api/v1/voice-ai/health
+
+curl -X POST http://localhost:3005/api/v1/voice-ai/process \n  -F audio=@question.wav -F voice_sample=@my-voice.wav -F language=en
+
+curl -o reply.wav http://localhost:3005/api/v1/voice-ai/audio/<request_id from the process response>
+```
+
+In the app: open **🎤 Voice assistant** in the header, click the mic, speak, click again. The reply plays
+automatically and each turn has a Replay button.
+
+**Colab test call:** open <http://localhost:5173/colab-call> (or **🧪 Test Colab call** on the start page). It runs
+the same call (prompt, tools, booking) on separate routes, `POST /colab-calls/start` and `WS /colab-calls/stream`, so
+the call demo at `/` is untouched. Push-to-talk: tap Talk, speak, tap again. Whisper on Colab hears you, Groq replies
+and runs the tools, XTTS speaks in the `VOICE_AI_VOICE_SAMPLE_PATH` voice. Needs two extra notebook endpoints:
+`POST /api/v1/voice/transcribe` (form `audio` → `{"text"}`) and `POST /api/v1/voice/speak` (form `text`, `language`,
+`voice_sample` → WAV). The voice assistant page is at <http://localhost:5173/voice-assistant>.
+
+In Postman: `POST` → Body → form-data, keys `audio` and `voice_sample` of type File, `language` as Text.
+
+`audio` is required; `voice_sample` is required unless `VOICE_AI_VOICE_SAMPLE_PATH` is set. Both must be WAV, MP3, OGG, WebM, FLAC or M4A, up to 10 MB each, checked by MIME type
+and file header. `language` is optional (default `en`) and must be one XTTS-v2 supports (`en`, `hi`, `es`, …).
+
+| Status | Meaning                                                           |
+| ------ | ----------------------------------------------------------------- |
+| 400    | Missing file, bad language, bad request ID, or Python rejected it |
+| 404    | No audio for that request ID                                      |
+| 413    | File over 10 MB                                                   |
+| 415    | Not an accepted audio format                                      |
+| 502    | Python failed to process or generate audio                        |
+| 503    | Colab not reachable, notebook stopped or ngrok tunnel expired     |
+| 504    | Colab took too long (limit 3 minutes for processing)              |
 
 ---
 
@@ -143,9 +196,11 @@ frontend/                React + Vite
 npm install            # at the repo root, installs Prettier
 npm run format         # format everything
 npm run format:check   # what CI runs
+
+cd backend && npm test # unit tests (the Colab service is mocked)
 ```
 
-CI (`.github/workflows/ci.yml`) checks formatting and builds the backend and frontend on every push and pull request.
+CI (`.github/workflows/ci.yml`) checks formatting, runs backend tests and builds the backend and frontend on every push and pull request.
 
 ---
 
@@ -162,6 +217,7 @@ CI (`.github/workflows/ci.yml`) checks formatting and builds the backend and fro
 
 Items are also marked `PRODUCTION TODO` in the code.
 
+- [ ] Authentication on `/api/v1/voice-ai/*` and an API key check in the Python service
 - [ ] Real phone line (Exotel, Sarvam or Twilio) instead of the browser
 - [ ] Database instead of `clinic.json`; Redis for sessions
 - [ ] Authentication on all endpoints and the WebSocket

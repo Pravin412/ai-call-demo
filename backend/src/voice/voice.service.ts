@@ -15,14 +15,21 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as WebSocket from 'ws';
 import { ClinicService } from '../clinic/clinic.service';
+import { VoiceAiService } from '../voice-ai/voice-ai.service';
+import { SUPPORTED_LANGUAGES } from '../voice-ai/dto/process-voice.dto';
 
 // Gemini Live API takes 16 kHz 16-bit PCM input (it replies with 24 kHz PCM, played by the browser)
 const INPUT_SAMPLE_RATE = 16000;
 
+// Colab mode (push-to-talk): limits on one customer turn of 16 kHz PCM16
+const MIN_UTTERANCE_BYTES = INPUT_SAMPLE_RATE * 2 * 0.3; // under 0.3 s is a mis-tap
+const MAX_UTTERANCE_BYTES = INPUT_SAMPLE_RATE * 2 * 30; // 30 s
+const SILENCE_RMS = 100; // a whole turn this quiet means the mic heard nothing; Whisper would invent words
+
 const GEMINI_LIVE_WS_URL =
   'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 
-// Tool definitions sent to Gemini at session setup
+// Tool definitions sent to Gemini at session setup (OPENAI_TOOLS below is the same list for Groq)
 const TOOL_DECLARATIONS = [
   {
     name: 'get_free_slots',
@@ -79,6 +86,14 @@ const TOOL_DECLARATIONS = [
   },
 ];
 
+const OPENAI_TOOLS = TOOL_DECLARATIONS.map((t) => ({
+  type: 'function',
+  function: { name: t.name, description: t.description, parameters: toJsonSchema(t.parameters) },
+}));
+
+// 'default' = whatever .env configures (browser speech or Gemini Live); 'colab' = Whisper + XTTS on Colab, Groq thinks
+export type VoiceMode = 'default' | 'colab';
+
 export interface VoiceCallbacks {
   onAudio: (chunk: Buffer) => void;
   onTranscript: (role: 'agent' | 'customer', text: string) => void;
@@ -99,6 +114,13 @@ interface Session {
   history: { role: 'user' | 'assistant'; text: string }[];
   turnQueue: Promise<void>; // browser-speech turns run one at a time so replies don't overlap
   endAfterSpeaking: boolean; // set by the end_call tool; the browser hangs up once the goodbye finishes playing
+  isColab: boolean;
+  colab: {
+    utterance: Buffer[]; // mic audio since the talk button went on
+    utteranceBytes: number;
+    busy: boolean; // a turn is running; mic audio is ignored
+    language: string; // language of the agent's last reply; XTTS speaks in it
+  };
 }
 
 @Injectable()
@@ -107,25 +129,36 @@ export class VoiceService {
   private readonly sessions = new Map<string, Session>();
   private readonly useBrowserSpeech = process.env.USE_BROWSER_SPEECH === 'true';
 
-  constructor(private readonly clinicService: ClinicService) {}
+  constructor(
+    private readonly clinicService: ClinicService,
+    private readonly voiceAiService: VoiceAiService,
+  ) {}
 
-  startSession(sessionId: string, systemPrompt: string, callbacks: VoiceCallbacks): void {
+  startSession(sessionId: string, systemPrompt: string, callbacks: VoiceCallbacks, mode: VoiceMode = 'default'): void {
+    const isColab = mode === 'colab';
     const session: Session = {
       sessionId,
       systemPrompt,
       callbacks,
       answered: false,
       pendingAudio: [],
-      isBrowserSpeech: this.useBrowserSpeech,
+      isBrowserSpeech: !isColab && this.useBrowserSpeech,
       agentTextBuffer: '',
       history: [],
       turnQueue: Promise.resolve(),
       endAfterSpeaking: false,
+      isColab,
+      colab: { utterance: [], utteranceBytes: 0, busy: false, language: 'en' },
     };
     this.sessions.set(sessionId, session);
-    this.logger.log(`Voice session started: ${sessionId} (browser-speech: ${this.useBrowserSpeech})`);
+    this.logger.log(
+      `Voice session started: ${sessionId} (${isColab ? 'colab' : `browser-speech: ${this.useBrowserSpeech}`})`,
+    );
 
-    if (this.useBrowserSpeech) {
+    if (isColab) {
+      // Nothing to connect up front; Colab is called per turn once the customer answers
+      session.callbacks.onStatus('ringing');
+    } else if (this.useBrowserSpeech) {
       this.initBrowserSpeechSession(session);
     } else {
       this.initGeminiLiveSession(session);
@@ -147,6 +180,11 @@ export class VoiceService {
       return;
     }
 
+    if (session.isColab) {
+      this.runColabTurn(session, null);
+      return;
+    }
+
     // Flush any audio that arrived before answer
     for (const chunk of session.pendingAudio) {
       this.forwardAudioToGemini(session, chunk);
@@ -157,6 +195,11 @@ export class VoiceService {
   sendAudio(sessionId: string, chunk: Buffer): void {
     const session = this.sessions.get(sessionId);
     if (!session || session.isBrowserSpeech) return;
+
+    if (session.isColab) {
+      this.handleColabAudio(session, chunk);
+      return;
+    }
 
     if (!session.answered) {
       session.pendingAudio.push(chunk);
@@ -575,6 +618,79 @@ export class VoiceService {
     return res.json();
   }
 
+  // ─── Colab mode: Whisper (ears) + XTTS-v2 (voice) on Colab, Groq thinks and runs the tools ──
+  // Push-to-talk: the browser streams raw 16 kHz mic PCM only while its talk button is on, then sends end_turn.
+  // Each turn: STT → Groq (+ tools) → TTS.
+
+  private handleColabAudio(session: Session, chunk: Buffer): void {
+    const c = session.colab;
+    if (!session.answered || session.endAfterSpeaking || c.busy) return;
+    if (c.utteranceBytes + chunk.length > MAX_UTTERANCE_BYTES) return; // keep the first 30 s
+    c.utterance.push(chunk);
+    c.utteranceBytes += chunk.length;
+  }
+
+  // The customer released the talk button: send what they said
+  endColabTurn(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session?.isColab || session.colab.busy) return;
+
+    const c = session.colab;
+    const pcm = Buffer.concat(c.utterance);
+    c.utterance = [];
+    c.utteranceBytes = 0;
+
+    if (pcm.length < MIN_UTTERANCE_BYTES || rms(pcm) < SILENCE_RMS) {
+      // Too short or silent: Whisper would invent words from it
+      session.callbacks.onStatus('nothing-heard');
+      return;
+    }
+    this.runColabTurn(session, pcm);
+  }
+
+  // pcm = the customer's utterance (16 kHz PCM16), or null for the agent's opening greeting
+  private async runColabTurn(session: Session, pcm: Buffer | null): Promise<void> {
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) {
+      session.callbacks.onError('GROQ_API_KEY is not set.');
+      return;
+    }
+
+    const c = session.colab;
+    c.busy = true;
+    try {
+      session.callbacks.onStatus('thinking');
+      let userText = 'Hello, please greet the customer and introduce yourself.';
+      if (pcm) {
+        const text = (await this.voiceAiService.transcribe(pcmToWav(pcm, INPUT_SAMPLE_RATE))).trim();
+        if (!text) {
+          session.callbacks.onStatus('listening');
+          return;
+        }
+        this.logger.log(`[Colab] Customer: ${text}`);
+        session.callbacks.onTranscript('customer', text);
+        userText = text;
+      }
+
+      const agentText = await this.runGroqTurn(session, apiKey, userText);
+      session.callbacks.onTranscript('agent', agentText);
+
+      c.language = ttsLanguageFor(agentText);
+      const wav = await this.voiceAiService.speak(agentText, c.language);
+      if (!this.sessions.has(session.sessionId)) return; // customer hung up while Colab was speaking
+      session.callbacks.onStatus('speaking');
+      session.callbacks.onAudio(wav);
+      // 'ending' tells the browser to hang up once the goodbye has finished playing
+      session.callbacks.onStatus(session.endAfterSpeaking ? 'ending' : 'listening');
+    } catch (err: any) {
+      // VoiceAiService errors carry a safe, user-facing message (e.g. "Voice AI service is offline...")
+      this.logger.error(`Colab turn failed: ${err.message}`);
+      if (this.sessions.has(session.sessionId)) session.callbacks.onError(err.message);
+    } finally {
+      c.busy = false;
+    }
+  }
+
   // ─── Groq Fallback ─────────────────────────────────────────────────────────
 
   private async callGroqText(session: Session, userText: string): Promise<void> {
@@ -585,6 +701,17 @@ export class VoiceService {
     }
 
     session.callbacks.onStatus('thinking');
+    const agentText = await this.runGroqTurn(session, apiKey, userText);
+    session.callbacks.onTranscript('agent', agentText);
+    session.callbacks.onStatus('speaking');
+    session.callbacks.onAudio(Buffer.from(JSON.stringify({ speakText: agentText })));
+    // 'ending' tells the browser to hang up once the goodbye has finished playing
+    session.callbacks.onStatus(session.endAfterSpeaking ? 'ending' : 'listening');
+  }
+
+  // One customer turn with Groq: runs tools until the model gives its spoken reply, records history, returns the reply.
+  // Shared by browser-speech mode (callGroqText) and Colab mode (runColabTurn).
+  private async runGroqTurn(session: Session, apiKey: string, userText: string): Promise<string> {
     session.history.push({ role: 'user', text: userText });
 
     const messages: any[] = [
@@ -640,19 +767,10 @@ export class VoiceService {
       agentText = "Sorry, I didn't catch that. Could you please repeat?";
     }
     session.history.push({ role: 'assistant', text: agentText });
-    session.callbacks.onTranscript('agent', agentText);
-    session.callbacks.onStatus('speaking');
-    session.callbacks.onAudio(Buffer.from(JSON.stringify({ speakText: agentText })));
-    // 'ending' tells the browser to hang up once the goodbye has finished playing
-    session.callbacks.onStatus(session.endAfterSpeaking ? 'ending' : 'listening');
+    return agentText;
   }
 
   private async fetchGroqWithRetry(apiKey: string, messages: any[]): Promise<any> {
-    const tools = TOOL_DECLARATIONS.map((t) => ({
-      type: 'function',
-      function: { name: t.name, description: t.description, parameters: toJsonSchema(t.parameters) },
-    }));
-
     let lastError = '';
     for (let attempt = 0; attempt < 3; attempt++) {
       const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -664,7 +782,7 @@ export class VoiceService {
         body: JSON.stringify({
           model: 'openai/gpt-oss-20b',
           messages,
-          tools,
+          tools: OPENAI_TOOLS,
           tool_choice: 'auto',
           // Hidden reasoning tokens count toward the free tier's 8k tokens/minute limit
           reasoning_effort: 'low',
@@ -692,6 +810,42 @@ export class VoiceService {
     }
     throw new Error(lastError);
   }
+}
+
+// Loudness of a PCM16 little-endian chunk
+function rms(chunk: Buffer): number {
+  let sum = 0;
+  const n = chunk.length >> 1;
+  for (let i = 0; i < n; i++) {
+    const v = chunk.readInt16LE(i * 2);
+    sum += v * v;
+  }
+  return n ? Math.sqrt(sum / n) : 0;
+}
+
+// Wrap raw mono PCM16 in a WAV header so Whisper on Colab can read it as a file
+function pcmToWav(pcm: Buffer, sampleRate: number): Buffer {
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16); // fmt chunk size
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(1, 22); // mono
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * 2, 28); // byte rate
+  header.writeUInt16LE(2, 32); // block align
+  header.writeUInt16LE(16, 34); // bits per sample
+  header.write('data', 36);
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
+}
+
+// XTTS needs the language up front; the agent replies in the customer's language, so pick it from the script used
+function ttsLanguageFor(text: string): string {
+  const lang = /[ऀ-ॿ]/.test(text) ? 'hi' : /[぀-ヿ]/.test(text) ? 'ja' : /[一-鿿]/.test(text) ? 'zh-cn' : 'en';
+  return SUPPORTED_LANGUAGES.includes(lang) ? lang : 'en';
 }
 
 // The model sometimes replies in Markdown despite instructions; TTS would read the symbols aloud
