@@ -412,8 +412,8 @@ export default function TalkToAi() {
             ? 'Talk to the local AI Platform (Whisper, Qwen 2.5 3B, Piper) one recording at a time. Press Record, speak, press Stop, play it back to check it, then Send.'
             : 'A hands-free conversation with the local AI Platform (Whisper, Qwen 2.5 3B, Piper). Press Start, the AI greets you, then just talk and pause when you are done.'
           : 'Type to the same AI (Qwen 2.5 3B on the local AI Platform). A reply takes a few seconds on this laptop.'}{' '}
-        It can book new appointments, move or cancel existing ones and ask staff to call back. Check the Call demo page for the real
-        booking state; the AI's reply can be wrong.
+        It can book new appointments, move or cancel existing ones and ask staff to call back. Check the Call demo page
+        for the real booking state; the AI's reply can be wrong.
       </p>
 
       {error && <p className="inline-error">{error}</p>}
@@ -499,7 +499,7 @@ export default function TalkToAi() {
                 {turn.pending ? (
                   <em className="muted">💭 Thinking...</em>
                 ) : (
-                  turn.ai ?? <em className="muted">(spoken reply)</em>
+                  (turn.ai ?? <em className="muted">(spoken reply)</em>)
                 )}
                 {turn.tools.length > 0 && <small className="muted"> · used {turn.tools.join(', ')}</small>}
                 {turn.audioUrl && (

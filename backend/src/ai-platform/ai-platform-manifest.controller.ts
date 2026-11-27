@@ -1,4 +1,12 @@
-import { Controller, ForbiddenException, Get, Headers, RawBodyRequest, Req, UnauthorizedException } from '@nestjs/common';
+import {
+  Controller,
+  ForbiddenException,
+  Get,
+  Headers,
+  RawBodyRequest,
+  Req,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { IncomingMessage } from 'http';
 import { ClinicService } from '../clinic/clinic.service';
 import { AiPlatformManifest, buildManifest } from './ai-platform.manifest';

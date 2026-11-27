@@ -32,7 +32,11 @@ const APPOINTMENT_ID: Parameter = {
   pattern: '^APT\\d{3,6}$',
 };
 
-const SLOT_ID: Parameter = { type: 'string', description: 'From get_free_slots, e.g. SLOT004', pattern: '^SLOT\\d{3,6}$' };
+const SLOT_ID: Parameter = {
+  type: 'string',
+  description: 'From get_free_slots, e.g. SLOT004',
+  pattern: '^SLOT\\d{3,6}$',
+};
 
 const tool = (name: string, description: string, parameters: Record<string, Parameter> = {}): Tool => ({
   description,
@@ -75,8 +79,16 @@ Rules:
         'verify_caller',
         "Check the customer's identity and get their appointments. Call this once you have their full name and the last 4 digits of their phone number.",
         {
-          customer_name: { type: 'string', description: 'Full name as the customer said it, e.g. Ravi Kumar', max_length: 100 },
-          phone_last4: { type: 'string', description: 'Last 4 digits of the phone number on the booking', pattern: '^\\d{4}$' },
+          customer_name: {
+            type: 'string',
+            description: 'Full name as the customer said it, e.g. Ravi Kumar',
+            max_length: 100,
+          },
+          phone_last4: {
+            type: 'string',
+            description: 'Last 4 digits of the phone number on the booking',
+            pattern: '^\\d{4}$',
+          },
         },
       ),
       get_free_slots: tool('get_free_slots', 'List the free appointment slots, each with a slot_id and a time.'),
@@ -85,7 +97,11 @@ Rules:
         'Book a new appointment for a customer who does not have one. Only after the customer has confirmed the time.',
         {
           customer_name: { type: 'string', description: 'First and last name, e.g. Ravi Kumar', max_length: 100 },
-          phone: { type: 'string', description: 'Mobile number as the customer said it, e.g. 98765 43210', pattern: '^[+0-9 -]{10,20}$' },
+          phone: {
+            type: 'string',
+            description: 'Mobile number as the customer said it, e.g. 98765 43210',
+            pattern: '^[+0-9 -]{10,20}$',
+          },
           slot_id: SLOT_ID,
         },
       ),
@@ -99,7 +115,12 @@ Rules:
       }),
       request_staff_callback: tool('request_staff_callback', 'Ask clinic staff to call the customer back.', {
         appointment_id: APPOINTMENT_ID,
-        reason: { type: 'string', description: 'Why the customer wants a call back, in a few words', required: false, max_length: 200 },
+        reason: {
+          type: 'string',
+          description: 'Why the customer wants a call back, in a few words',
+          required: false,
+          max_length: 200,
+        },
       }),
     },
   };

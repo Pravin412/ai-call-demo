@@ -49,7 +49,8 @@ function parseBody(raw: Buffer): { args: Record<string, unknown>; sessionId: str
   }
   const args = body?.arguments;
   const sessionId = body?.session_id;
-  if (!args || typeof args !== 'object' || Array.isArray(args)) throw new BadRequestException('arguments must be an object.');
+  if (!args || typeof args !== 'object' || Array.isArray(args))
+    throw new BadRequestException('arguments must be an object.');
   if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 128) {
     throw new BadRequestException('session_id is required.');
   }

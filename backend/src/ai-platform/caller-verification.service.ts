@@ -11,9 +11,7 @@ const NAME_LOCK_WINDOW_MS = 15 * 60_000;
 const MAX_CREATES_PER_SESSION = 1;
 const MAX_CREATES_PER_HOUR = 20;
 
-export type VerifyOutcome =
-  | { ok: true; appointments: Appointment[] }
-  | { ok: false; reason: 'locked' | 'no_match' };
+export type VerifyOutcome = { ok: true; appointments: Appointment[] } | { ok: false; reason: 'locked' | 'no_match' };
 
 interface SessionState {
   appointmentIds: Set<string>;
@@ -45,7 +43,9 @@ export class CallerVerificationService {
     if (matches.length === 0) {
       session.failures++;
       this.nameFailures.set(name, [...this.nameFailureTimes(name), Date.now()]);
-      this.logger.warn(`Verification failed for session ${sessionId} (${session.failures}/${MAX_FAILURES_PER_SESSION})`);
+      this.logger.warn(
+        `Verification failed for session ${sessionId} (${session.failures}/${MAX_FAILURES_PER_SESSION})`,
+      );
       return { ok: false, reason: 'no_match' };
     }
 

@@ -76,7 +76,11 @@ export class ClinicToolsService {
         const outcome = this.result(this.clinic.createAppointment(customerName.replace(/\s+/g, ' '), phone, slotId));
         this.verification.recordCreated(sessionId, outcome.appointment!.id);
         const { id, customerName: name, time, status } = outcome.appointment!;
-        return { success: true, message: outcome.message, appointment: { appointment_id: id, customerName: name, time, status } };
+        return {
+          success: true,
+          message: outcome.message,
+          appointment: { appointment_id: id, customerName: name, time, status },
+        };
       }
       case 'reschedule_appointment': {
         const appointmentId = this.verifiedAppointment(sessionId, args);

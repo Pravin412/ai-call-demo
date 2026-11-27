@@ -174,7 +174,10 @@ export class McpController {
           return { isError: true, content: [{ type: 'text' as const, text: err.message }] };
         }
         this.logger.error(`MCP tool ${request.params.name} failed: ${(err as Error)?.message}`);
-        return { isError: true, content: [{ type: 'text' as const, text: 'The clinic system failed. Try again later.' }] };
+        return {
+          isError: true,
+          content: [{ type: 'text' as const, text: 'The clinic system failed. Try again later.' }],
+        };
       }
     });
 
