@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { WsAdapter } from '@nestjs/platform-ws';
 import { ValidationPipe } from '@nestjs/common';
 import * as dotenv from 'dotenv';
@@ -8,7 +9,10 @@ import { AppModule } from './app.module';
 dotenv.config();
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // rawBody: the AI Platform tool endpoints verify an HMAC signature over the exact bytes
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
+  // POST /ai-platform/voice takes the recording as the raw request body
+  app.useBodyParser('raw', { type: ['audio/*', 'application/octet-stream'], limit: '10mb' });
 
   // Enable CORS for the Vite dev server and any local frontend
   app.enableCors({

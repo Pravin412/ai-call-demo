@@ -9,5 +9,6 @@ import { VoiceModule } from '../voice/voice.module';
   imports: [ClinicModule, VoiceModule],
   controllers: [CallsController],
   providers: [CallsService, CallsGateway],
+  exports: [CallsService], // Colab test calls (colab-calls/) reuse the same sessions, transcripts and results
 })
 export class CallsModule {}

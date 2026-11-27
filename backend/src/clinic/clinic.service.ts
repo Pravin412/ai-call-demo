@@ -44,6 +44,10 @@ export class ClinicService {
     return { clinicName: data.clinic.name, doctorName: data.doctor.name };
   }
 
+  getClinicPhone(): string {
+    return this.load().clinic.phone;
+  }
+
   getAppointment(id: string): Appointment | null {
     const data = this.load();
     return data.appointments.find((a) => a.id === id) ?? null;
@@ -97,6 +101,48 @@ export class ClinicService {
       message: `Appointment rebooked from ${oldTime} to ${slot.time}.`,
       appointment: appt,
     };
+  }
+
+  // Tool: create_appointment (new patient). The patient record is the name + phone on the appointment.
+  createAppointment(
+    customerName: string,
+    phone: string,
+    slotId: string,
+  ): { success: boolean; message: string; appointment?: Appointment } {
+    this.logger.log(`[TOOL] create_appointment(slotId=${slotId})`);
+
+    const data = this.load();
+    const digits = phone.replace(/\D/g, '');
+    const hasActive = data.appointments.some(
+      (a) => a.status !== 'cancelled' && a.phone.replace(/\D/g, '').endsWith(digits.slice(-10)),
+    );
+    if (hasActive) {
+      return {
+        success: false,
+        message: 'This phone number already has an appointment. Verify the caller and reschedule it instead.',
+      };
+    }
+
+    const slotIdx = data.freeSlots.findIndex((s) => s.id === slotId);
+    if (slotIdx === -1) {
+      const valid = data.freeSlots.map((s) => `${s.id} (${s.time})`).join(', ');
+      return { success: false, message: `Slot ${slotId} is not available. Valid slot ids: ${valid}.` };
+    }
+
+    const nextNumber = Math.max(0, ...data.appointments.map((a) => Number(a.id.replace(/\D/g, '')) || 0)) + 1;
+    const appt: Appointment = {
+      id: `APT${String(nextNumber).padStart(3, '0')}`,
+      customerName,
+      phone: `+${digits.length === 10 ? `91${digits}` : digits}`,
+      time: data.freeSlots[slotIdx].time,
+      status: 'scheduled',
+    };
+    data.appointments.push(appt);
+    data.freeSlots.splice(slotIdx, 1);
+
+    this.save(data);
+    this.logger.log(`[TOOL] Created ${appt.id} at ${appt.time}`);
+    return { success: true, message: `Appointment booked for ${appt.time}.`, appointment: appt };
   }
 
   // Tool: request_staff_callback

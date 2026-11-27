@@ -211,6 +211,12 @@ export default function App() {
         <span className="app-logo">📞</span>
         <span>AI Call Demo — City Care Clinic</span>
         {USE_BROWSER_SPEECH && <span className="badge">Browser Speech Mode</span>}
+        {state.screen === 'setup' && (
+          <nav className="view-tabs">
+            <a href="/colab-call">🧪 Test Colab call</a>
+            <a href="/talk-to-ai">🤖 Talk to AI</a>
+          </nav>
+        )}
       </header>
 
       {state.error && (

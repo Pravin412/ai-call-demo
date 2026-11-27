@@ -11,6 +11,10 @@ build/
 .env.*
 !.env.example
 
+# Voice recordings and samples
+*.wav
+*.webm
+
 # Logs
 *.log
 npm-debug.log*
@@ -20,3 +24,6 @@ npm-debug.log*
 .idea/
 .DS_Store
 Thumbs.db
+
+# Vite temp files
+*.timestamp-*.mjs
